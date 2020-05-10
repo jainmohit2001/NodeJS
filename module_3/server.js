@@ -1,47 +1,39 @@
-const mongodb = require('mongodb')
-const async = require('async')
-const bodyParser = require('body-parser')
-const express = require('express')
-const errorHandler = require('errorhandler')
+const mongodb= require('mongodb')
 const path = require('path')
+const async = require('async')
 
-const address = require(path.join(__dirname,'m3-customer-address-data.json'))
 const customers = require(path.join(__dirname,'m3-customer-data.json'))
+const customerAddresses = require(path.join(__dirname, 'm3-customer-address-data.json'))
+const url = 'mongodb://localhost:27017/edx-nodejs'
 
-const url = 'mongodb://localhost:27017'
-const dbName = 'edx-module-3'
-const collectionName = 'customers'
+let tasks = []
 
-const chunk = process.argv[2] ? parseInt(process.argv[2],10) : customers.length
+const limit = parseInt(process.argv[2], 10) || 1000
 
-mongodb.MongoClient.connect(url, (error, client) => {
-    if(error) return process.exit(1)
-    console.log("successfully connected to mongodb")
-    const db = client.db(dbName)
-    const collection = db.collection(collectionName)
+mongodb.MongoClient.connect(url, (error, db) => {
+    if (error) return process.exit(1)
 
-    const tasks = []
+    customers.forEach((customer, index, list) => {
+        customers[index] = Object.assign(customer, customerAddresses[index])
 
-    for( let i=0; i<customers.length; i+= chunk){
-        const start = i
-        const end = i+chunk;
-        const slicedCustomers = customers.slice(start,end).map((customer,idx) => Object.assign(customer, address[idx]))
-
-        const task = (callback) =>{
-            console.log(`Processing ${slicedCustomers.length} customer(s).`)
-            collection.insertMany(slicedCustomers,(error, docs) => {
-                if (error) console.error(error)
-                callback(error,docs)
+        if (index % limit == 0) {
+            const start = index
+            const end = (start+limit > customers.length) ? customers.length-1 : start+limit
+            tasks.push((done) => {
+                console.log(`Processing ${start}-${end} out of ${customers.length}`)
+                db.collection('customers').insert(customers.slice(start, end), (error, results) => {
+                    done(error, results)
+                })
             })
         }
-        tasks.push(task)
-    }
-
-    console.log(`Starting migration... Got ${tasks.length} task(s)`)
-    async.parallel(tasks,(error,results) => {
-        if(error) return process.exit(1)
-        console.log('Migration finished. CLosing connection to mongodb')
-        client.close()
     })
-
+    console.log(`Launching ${tasks.length} parallel task(s)`)
+    const startTime = Date.now()
+    async.parallel(tasks, (error, results) => {
+        if (error) console.error(error)
+        const endTime = Date.now()
+        console.log(`Execution time: ${endTime-startTime}`)
+        // console.log(results)
+        db.close()
+    })
 })
